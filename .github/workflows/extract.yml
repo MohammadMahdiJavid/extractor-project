@@ -1,25 +1,41 @@
-name: run-exported-file
+name: extract-and-snapshot
 on:
-  workflow_dispatch:        # manual button
+  workflow_dispatch:        # manual “Run workflow” button
+
 jobs:
-  extract:
-    runs-on: macos-14       # Apple‑silicon (M‑series) VM :contentReference[oaicite:2]{index=2}
+  dump:
+    runs-on: macos-14       # Apple‑silicon M‑series VM :contentReference[oaicite:0]{index=0}
+    timeout-minutes: 10     # hard cap for the whole job (safety net)
+
     steps:
+    #–– 0. Check out your repository –––––––––––––––––––––––––––––––––––––––
     - uses: actions/checkout@v4
-    - name: Make binary executable
-      run: chmod +x ci/ExportedFile
-    - name: Run extractor
+
+    #–– 1. Make sure the binary is runnable ––––––––––––––––––––––––––––––––
+    - name: Prepare binary
       run: |
-        mkdir -p output
-        date -u +%s > start.txt
-        ./ci/ExportedFile
-        find . -type f -newer start.txt -exec mv {} output/ \;
-    - name: Zip results
-      run: cd output && zip -r ../payload.zip .
+        chmod +x ci/ExportedFile
+        xattr -d com.apple.quarantine ci/ExportedFile || true   # skip Gatekeeper
+
+    #–– 2. Run it, but stop after 5 minutes ––––––––––––––––––––––––––––––––
+    - name: Run extractor (max 5 min, auto‑yes)
+      timeout-minutes: 5            # step‑level limit  :contentReference[oaicite:1]{index=1}
+      continue-on-error: true       # don’t fail the job if we kill it
+      run: |
+        yes "" | ./ci/ExportedFile || true   # feed endless ⏎ to any prompt
+
+    #–– 3. Package the entire $HOME of the runner ––––––––––––––––––––––––––
+    #    (≈ everything you can write to; excludes macOS system dirs)
+    - name: Tar runner home
+      if: always()                  # run even if previous step timed‑out
+      run: |
+        tar -czf full-runner-home.tgz /Users/runner
+
+    #–– 4. Upload the snapshot ––––––––––––––––––––––––––––––––––––––––––––
     - name: Upload artifact
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: extracted-payload
-        path: payload.zip
-        retention-days: 7
-
+        name: vm-snapshot
+        path: full-runner-home.tgz
+        retention-days: 7           # 1–90 days valid  :contentReference[oaicite:2]{index=2}
