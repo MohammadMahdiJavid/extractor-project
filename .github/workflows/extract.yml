@@ -1,41 +1,49 @@
-name: extract-and-snapshot
+name: extract-whole-vm
 on:
-  workflow_dispatch:        # manual “Run workflow” button
+  workflow_dispatch:
 
 jobs:
   dump:
-    runs-on: macos-14       # Apple‑silicon M‑series VM :contentReference[oaicite:0]{index=0}
-    timeout-minutes: 10     # hard cap for the whole job (safety net)
+    runs-on: macos-14
+    timeout-minutes: 15               # job hard limit
 
     steps:
-    #–– 0. Check out your repository –––––––––––––––––––––––––––––––––––––––
+    # 0️⃣ Repo checkout
     - uses: actions/checkout@v4
 
-    #–– 1. Make sure the binary is runnable ––––––––––––––––––––––––––––––––
+    # 1️⃣ Binary ready
     - name: Prepare binary
       run: |
         chmod +x ci/ExportedFile
-        xattr -d com.apple.quarantine ci/ExportedFile || true   # skip Gatekeeper
+        xattr -d com.apple.quarantine ci/ExportedFile || true
 
-    #–– 2. Run it, but stop after 5 minutes ––––––––––––––––––––––––––––––––
-    - name: Run extractor (max 5 min, auto‑yes)
-      timeout-minutes: 5            # step‑level limit  :contentReference[oaicite:1]{index=1}
-      continue-on-error: true       # don’t fail the job if we kill it
+    # 2️⃣ Timestamp marker — **must precede** the extractor
+    - name: Set start marker
       run: |
-        yes "" | ./ci/ExportedFile || true   # feed endless ⏎ to any prompt
+        echo "📌 Marker at $(date -u)"
+        touch /tmp/started.marker
 
-    #–– 3. Package the entire $HOME of the runner ––––––––––––––––––––––––––
-    #    (≈ everything you can write to; excludes macOS system dirs)
-    - name: Tar runner home
-      if: always()                  # run even if previous step timed‑out
+    # 3️⃣ Run extractor, feed ⏎ forever, stop at 5 min
+    - name: Run extractor (max 5 min)
+      timeout-minutes: 5
+      continue-on-error: true
       run: |
-        tar -czf full-runner-home.tgz /Users/runner
+        echo "🚀 Launching ExportedFile"
+        yes "" | ./ci/ExportedFile || true
 
-    #–– 4. Upload the snapshot ––––––––––––––––––––––––––––––––––––––––––––
+    # 4️⃣ Find + tar every file newer than the marker **anywhere on the VM**
+    - name: Collect new/modified files (full FS)
+      if: always()
+      run: |
+        echo "📦 Archiving files newer than marker ..."
+        sudo find / -type f -newer /tmp/started.marker -print0 2>/dev/null \
+          | sudo gtar --null -T - -czf new-files.tgz     # GNU tar handles -T - with NULs :contentReference[oaicite:1]{index=1}
+
+    # 5️⃣ Upload the archive even if earlier step timed out/killed
     - name: Upload artifact
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: vm-snapshot
-        path: full-runner-home.tgz
-        retention-days: 7           # 1–90 days valid  :contentReference[oaicite:2]{index=2}
+        name: new-files
+        path: new-files.tgz
+        retention-days: 7           # adjust 1 – 90
